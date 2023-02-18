@@ -13,8 +13,7 @@ interface ICronV1PoolFactory {
     address _token1,
     string memory _name,
     string memory _symbol,
-    uint256 _poolType,
-    address _pauser
+    uint256 _poolType
   ) external returns (address);
 
   function transferOwnership(

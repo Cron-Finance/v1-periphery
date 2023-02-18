@@ -14,63 +14,58 @@ import "../interfaces/ICronV1Pool.sol";
 import "../interfaces/pool/ICronV1PoolEnums.sol";
 import "../interfaces/ICronV1PoolFactory.sol";
 
-import { Cross_Chain, Goerli_Chain } from "./Constants.sol";
+import { CrossChain, GoerliChain } from "./Constants.sol";
 
-library PoolActions {
+library CronV1PoolActions {
 
   function join(
     address _pool,
     address _to,
     uint256 _liquidity0,
     uint256 _liquidity1,
-    uint256 _joinKind
-  ) public {
+    ICronV1Pool.JoinType _joinKind,
+    uint256[] memory _maxAmountsIn
+  ) internal {
     // setup parameters for joinPool
     uint256[] memory balances = new uint256[](2);
     balances[0] = _liquidity0;
     balances[1] = _liquidity1;
-    bytes memory userData = abi.encode(_joinKind, balances);
+    bytes memory userData = abi.encode(_joinKind, new uint256[](2));
     bytes32 poolId = ICronV1Pool(_pool).POOL_ID();
-    (IERC20[] memory tokens, , ) = IVault(Cross_Chain.VAULT).getPoolTokens(poolId);
+    (IERC20[] memory tokens, , ) = IVault(CrossChain.VAULT).getPoolTokens(poolId);
     IAsset[] memory assets = _convertERC20sToAssets(tokens);
-    uint256[] memory maxAmountsIn = new uint256[](tokens.length);
-    for (uint256 i; i < tokens.length; i++) {
-      maxAmountsIn[i] = type(uint256).max;
-    }
-    bool fromInternalBalance = false;
-    // approve tokens to be used by vault
-    IERC20(tokens[0]).approve(Cross_Chain.VAULT, _liquidity0);
-    IERC20(tokens[1]).approve(Cross_Chain.VAULT, _liquidity1);
     // call joinPool function on TWAMMs
-    IVault(Cross_Chain.VAULT).joinPool(
+    IVault(CrossChain.VAULT).joinPool(
       poolId,
       msg.sender,
       payable (_to),
       IVault.JoinPoolRequest(
         assets,
-        maxAmountsIn,
+        _maxAmountsIn,
         userData,
-        fromInternalBalance
+        false // fromInternalBalance
       )
     );
   }
 
   function swap(
     uint256 _amountIn,
+    uint256 _slippage,
     uint256 _argument,
     ICronV1Pool.SwapType _swapType,
     address _tokenIn,
-    address _pool
-  ) public returns (uint256 amountOut) {
+    address _pool,
+    address _to
+  ) internal returns (uint256 amountOut) {
     // setup parameters for swap
-    bytes32 poolId = ICronV1Pool(_pool).POOL_ID();
-    (IERC20[] memory tokens, , ) = IVault(Cross_Chain.VAULT).getPoolTokens(poolId);
+    (IERC20[] memory tokens, , ) = IVault(CrossChain.VAULT).getPoolTokens(ICronV1Pool(_pool).POOL_ID());
     IAsset[] memory assets = _convertERC20sToAssets(tokens);
     // approve tokens to spend from this contract in the vault
     IERC20 token = (_tokenIn == address(tokens[0])) ? tokens[0] : tokens[1];
-    token.approve(Cross_Chain.VAULT, _amountIn);
+    token.approve(CrossChain.VAULT, _amountIn);
+    uint256 limit = (_slippage > 0) ? (_amountIn * (100 - _slippage))/100 : 0;
     // swap amounts with vault
-    amountOut = IVault(Cross_Chain.VAULT).swap(
+    amountOut = IVault(CrossChain.VAULT).swap(
       IVault.SingleSwap(
         ICronV1Pool(_pool).POOL_ID(),
         IVault.SwapKind.GIVEN_IN,
@@ -85,10 +80,10 @@ library PoolActions {
       IVault.FundManagement(
         msg.sender,
         false,
-        payable (msg.sender),
+        payable (_to),
         false
       ),
-      0,
+      limit,
       block.timestamp + 1000
     );
   }
@@ -97,18 +92,18 @@ library PoolActions {
     uint256 _amountIn,
     address _tokenIn,
     address[] memory _pools
-  ) public returns (int256[] memory amountOut) {
+  ) internal returns (int256[] memory amountOut) {
     // setup parameters for flash swap
     bytes32 poolId = ICronV1Pool(_pools[0]).POOL_ID();
-    (IERC20[] memory tokens, , ) = IVault(Cross_Chain.VAULT).getPoolTokens(poolId);
+    (IERC20[] memory tokens, , ) = IVault(CrossChain.VAULT).getPoolTokens(poolId);
     IAsset[] memory assets = _convertERC20sToAssets(tokens);
     int256[] memory limits = new int256[](tokens.length);
     // approve tokens to spend from this contract in the vault
     IERC20 token = (_tokenIn == address(tokens[0])) ? tokens[0] : tokens[1];
-    token.approve(Cross_Chain.VAULT, _amountIn);
+    token.approve(CrossChain.VAULT, _amountIn);
     IVault.BatchSwapStep[] memory swaps = _generateFlashSwapSteps(_amountIn, _tokenIn, _pools);
     // swap amounts with vault
-    amountOut = IVault(Cross_Chain.VAULT).batchSwap(
+    amountOut = IVault(CrossChain.VAULT).batchSwap(
       IVault.SwapKind.GIVEN_IN,
       swaps,
       assets,
@@ -124,17 +119,18 @@ library PoolActions {
   }
 
   function exit(
-    uint _argument,
+    uint256 _argument,
     ICronV1Pool.ExitType _exitType,
-    address _pool
-  ) public {
+    address _pool,
+    address _to
+  ) internal returns (uint256[] memory amountsOutU112, uint256[] memory dueProtocolFeeAmountsU96) {
     // build userData field
     bytes memory userData = abi.encode(
       _exitType, // exit type
       _argument
     );
     bytes32 poolId = ICronV1Pool(_pool).POOL_ID();
-    (IERC20[] memory tokens, , ) = IVault(Cross_Chain.VAULT).getPoolTokens(poolId);
+    (IERC20[] memory tokens, , ) = IVault(CrossChain.VAULT).getPoolTokens(poolId);
     IAsset[] memory assets = _convertERC20sToAssets(tokens);
     // approve tokens to spend from this contract in the vault
     uint256[] memory minAmountIn = new uint256[](tokens.length);
@@ -142,10 +138,10 @@ library PoolActions {
       minAmountIn[i] = type(uint256).min;
     }
     // swap amounts with vault
-    IVault(Cross_Chain.VAULT).exitPool(
+    IVault(CrossChain.VAULT).exitPool(
       ICronV1Pool(_pool).POOL_ID(),
       msg.sender,
-      payable (msg.sender),
+      payable (_to),
       IVault.ExitPoolRequest(
         assets,
         minAmountIn,
@@ -163,7 +159,7 @@ library PoolActions {
     bytes memory userData = abi.encode(ICronV1PoolEnums.SwapType.RegularSwap, 0);
     for (uint256 i = 0; i < _pools.length; i++) {
       bytes32 poolId = ICronV1Pool(_pools[i]).POOL_ID();
-      (IERC20[] memory tokens, , ) = IVault(Cross_Chain.VAULT).getPoolTokens(poolId);
+      (IERC20[] memory tokens, , ) = IVault(CrossChain.VAULT).getPoolTokens(poolId);
       uint256 assetInIndex = (_tokenIn == address(tokens[0])) ? 0 : 1;
       uint256 assetOutIndex = (_tokenIn == address(tokens[0])) ? 1 : 0;
       uint256 amount = (i == 0) ? _amountIn : 0;
