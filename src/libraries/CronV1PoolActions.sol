@@ -4,8 +4,6 @@ pragma solidity ^0.7.0;
 
 pragma experimental ABIEncoderV2;
 
-import "forge-std/Test.sol";
-
 import "../balancer-core-v2/vault/interfaces/IVault.sol";
 import "../balancer-core-v2/vault/interfaces/IAsset.sol";
 import "../balancer-core-v2/test/WETH.sol";
